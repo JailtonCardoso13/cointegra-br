@@ -590,16 +590,29 @@ const CointegrationDashboard = () => {
       
       history1.forEach(d => {
         if (d && d.date && d.close != null) {
-          // Normalizar a data para comparação (usar apenas a data, sem hora)
-          const dateKey = typeof d.date === 'number' ? d.date : new Date(d.date).getTime() / 1000;
-          dateMap1.set(Math.floor(dateKey / 86400), { date: dateKey, close: d.close });
+          // A Brapi retorna date como timestamp Unix em segundos
+          // Normalizar: se > 10 bilhões, está em ms; senão, em segundos
+          let timestamp = d.date;
+          if (typeof timestamp === 'string') {
+            timestamp = new Date(timestamp).getTime() / 1000;
+          } else if (timestamp > 9999999999) {
+            timestamp = timestamp / 1000; // Converter de ms para segundos
+          }
+          const dateKey = Math.floor(timestamp / 86400); // Dia único
+          dateMap1.set(dateKey, { date: timestamp, close: d.close });
         }
       });
       
       history2.forEach(d => {
         if (d && d.date && d.close != null) {
-          const dateKey = typeof d.date === 'number' ? d.date : new Date(d.date).getTime() / 1000;
-          dateMap2.set(Math.floor(dateKey / 86400), { date: dateKey, close: d.close });
+          let timestamp = d.date;
+          if (typeof timestamp === 'string') {
+            timestamp = new Date(timestamp).getTime() / 1000;
+          } else if (timestamp > 9999999999) {
+            timestamp = timestamp / 1000;
+          }
+          const dateKey = Math.floor(timestamp / 86400);
+          dateMap2.set(dateKey, { date: timestamp, close: d.close });
         }
       });
       
@@ -670,13 +683,23 @@ const CointegrationDashboard = () => {
         currentPrice2: quote2?.regularMarketPrice || prices2[prices2.length - 1],
         change1: quote1?.regularMarketChangePercent || 0,
         change2: quote2?.regularMarketChangePercent || 0,
-        historicalPrices: dates.map((date, i) => ({
-          date: new Date(date * 1000).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }),
-          [asset1]: prices1[i],
-          [asset2]: prices2[i],
-          spread: residuals[i],
-          spreadNorm: spreadStd > 0 ? (residuals[i] - spreadMean) / spreadStd : 0
-        })),
+        historicalPrices: dates.map((date, i) => {
+          // Normalizar o spread para Z-Score
+          const normValue = spreadStd > 0 ? (residuals[i] - spreadMean) / spreadStd : 0;
+          // Garantir que o valor está dentro de limites razoáveis
+          const clampedNorm = Math.max(-5, Math.min(5, normValue));
+          
+          // Converter data - verificar se já está em ms ou segundos
+          const timestamp = date > 9999999999 ? date : date * 1000;
+          
+          return {
+            date: new Date(timestamp).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }),
+            [asset1]: prices1[i],
+            [asset2]: prices2[i],
+            spread: residuals[i],
+            spreadNorm: clampedNorm
+          };
+        }),
         lastUpdate: new Date().toLocaleTimeString('pt-BR')
       };
     } catch (error) {
@@ -1418,7 +1441,13 @@ const CointegrationDashboard = () => {
                       <LineChart data={historicalData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                         <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
-                        <YAxis stroke="#64748b" tick={{ fontSize: 10 }} domain={[-3, 3]} />
+                        <YAxis 
+                          stroke="#64748b" 
+                          tick={{ fontSize: 10 }} 
+                          domain={[-3, 3]}
+                          allowDataOverflow={true}
+                          tickFormatter={(value) => `${value}σ`}
+                        />
                         <Tooltip 
                           contentStyle={{ 
                             backgroundColor: '#1e293b', 
@@ -1426,7 +1455,10 @@ const CointegrationDashboard = () => {
                             borderRadius: '8px',
                             fontSize: '12px'
                           }}
-                          formatter={(value) => [value?.toFixed(2) + 'σ', 'Z-Score']}
+                          formatter={(value) => {
+                            const num = typeof value === 'number' ? value : 0;
+                            return [num.toFixed(2) + 'σ', 'Z-Score'];
+                          }}
                         />
                         <ReferenceLine y={0} stroke="#64748b" strokeDasharray="3 3" label={{ value: 'Média', fill: '#64748b', fontSize: 10 }} />
                         <ReferenceLine y={2} stroke="#22c55e" strokeDasharray="3 3" label={{ value: '+2σ', fill: '#22c55e', fontSize: 10 }} />
@@ -1440,6 +1472,7 @@ const CointegrationDashboard = () => {
                           strokeWidth={2}
                           dot={false}
                           name="Z-Score"
+                          connectNulls={true}
                         />
                       </LineChart>
                     </ResponsiveContainer>
